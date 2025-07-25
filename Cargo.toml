@@ -1,0 +1,20 @@
+[package]
+name = "packagekit"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[build-dependencies]
+bindgen = "0.71.0"
+
+[dependencies]
+config = { path = "/home/ninya/aeryn/os-tools/crates/config" }
+moss = { path = "/home/ninya/aeryn/os-tools/moss" }
+stone = { path = "/home/ninya/aeryn/os-tools/crates/stone" }
+vfs = { path = "/home/ninya/aeryn/os-tools/crates/vfs" }
+glib-sys = "0.18"
+fs-err = "3.1.1"
+itertools = "0.14.0"
+url = "2.5.4"
+ffi-convert = "0.6.2"

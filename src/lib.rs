@@ -333,13 +333,18 @@ unsafe extern "C" fn backend_download_packages_thread(
     params: *mut _GVariant,
     _user_data: *mut c_void,
 ) -> () {
-    let package_ids: *mut *const c_char = std::ptr::null_mut();
-    let directory: *const c_char = std::ptr::null();
+    let mut package_ids: *mut *const c_char = std::ptr::null_mut();
+    let mut directory: *const c_char = std::ptr::null();
     let format = CString::new("(^a&ss)").pk_err(job);
     // Cast _GVariant to GVariant
     let gvariant_ptr = params as *mut GVariant;
     unsafe {
-        g_variant_get(gvariant_ptr, format.as_ptr(), &package_ids, &directory);
+        g_variant_get(
+            gvariant_ptr,
+            format.as_ptr(),
+            &mut package_ids as *mut _,
+            &mut directory as *mut _,
+        );
     }
 
     let backend = get_moss_client();
@@ -452,12 +457,12 @@ unsafe extern "C" fn backend_get_details_thread(
     params: *mut _GVariant,
     _user_data: *mut c_void,
 ) -> () {
-    let package_ids: *mut *const c_char = std::ptr::null_mut();
+    let mut package_ids: *mut *const c_char = std::ptr::null_mut();
     let format = CString::new("(^a&s)").pk_err(job);
     // Cast _GVariant to GVariant
     let gvariant_ptr = params as *mut GVariant;
     unsafe {
-        g_variant_get(gvariant_ptr, format.as_ptr(), &package_ids);
+        g_variant_get(gvariant_ptr, format.as_ptr(), &mut package_ids as *mut _);
     }
 
     let backend = get_moss_client();
@@ -516,12 +521,12 @@ unsafe extern "C" fn backend_get_details_local_thread(
     params: *mut _GVariant,
     _user_data: *mut c_void,
 ) -> () {
-    let full_paths: *mut *const c_char = std::ptr::null_mut();
+    let mut full_paths: *mut *const c_char = std::ptr::null_mut();
     let format = CString::new("(^a&s)").unwrap();
     // Cast _GVariant to GVariant
     let gvariant_ptr = params as *mut GVariant;
     unsafe {
-        g_variant_get(gvariant_ptr, format.as_ptr(), &full_paths);
+        g_variant_get(gvariant_ptr, format.as_ptr(), &mut full_paths as *mut _);
     }
 
     let paths = c_char_array_to_vec(full_paths);
@@ -669,12 +674,12 @@ unsafe extern "C" fn backend_get_packages_thread(
     params: *mut _GVariant,
     _user_data: *mut c_void,
 ) -> () {
-    let filters: PkBitfield = 0;
+    let mut filters: PkBitfield = 0;
     let format = CString::new("(t)").pk_err(job);
     // Cast _GVariant to GVariant
     let gvariant_ptr = params as *mut GVariant;
     unsafe {
-        g_variant_get(gvariant_ptr, format.as_ptr(), &filters);
+        g_variant_get(gvariant_ptr, format.as_ptr(), &mut filters as *mut _);
     }
 
     let backend = get_moss_client();
@@ -742,13 +747,18 @@ unsafe extern "C" fn backend_resolve_thread(
     params: *mut _GVariant,
     _user_data: *mut c_void,
 ) -> () {
-    let search: *mut *const c_char = std::ptr::null_mut();
-    let filters: PkBitfield = 0;
-    let format = CString::new("(t^a&s)").unwrap();
+    let mut search: *mut *const c_char = std::ptr::null_mut();
+    let mut filters: PkBitfield = 0;
+    let format = CString::new("(t^a&s)").pk_err(job);
     // Cast _GVariant to GVariant
     let gvariant_ptr = params as *mut GVariant;
     unsafe {
-        g_variant_get(gvariant_ptr, format.as_ptr(), &filters, &search);
+        g_variant_get(
+            gvariant_ptr,
+            format.as_ptr(),
+            &mut filters as *mut _,
+            &mut search as *mut _,
+        );
     }
 
     let backend = get_moss_client();
@@ -833,12 +843,12 @@ unsafe extern "C" fn backend_get_files_thread(
     params: *mut _GVariant,
     _user_data: *mut c_void,
 ) -> () {
-    let package_ids: *mut *const c_char = std::ptr::null_mut();
-    let format = CString::new("(^a&s)").unwrap();
+    let mut package_ids: *mut *const c_char = std::ptr::null_mut();
+    let format = CString::new("(^a&s)").pk_err(job);
     // Cast _GVariant to GVariant
     let gvariant_ptr = params as *mut GVariant;
     unsafe {
-        g_variant_get(gvariant_ptr, format.as_ptr(), &package_ids);
+        g_variant_get(gvariant_ptr, format.as_ptr(), &mut package_ids as *mut _);
     }
 
     let backend = get_moss_client();
@@ -896,12 +906,12 @@ unsafe extern "C" fn backend_get_files_local_thread(
     params: *mut _GVariant,
     _user_data: *mut c_void,
 ) -> () {
-    let full_paths: *mut *const c_char = std::ptr::null_mut();
-    let format = CString::new("(^a&s)").unwrap();
+    let mut full_paths: *mut *const c_char = std::ptr::null_mut();
+    let format = CString::new("(^a&s)").pk_err(job);
     // Cast _GVariant to GVariant
     let gvariant_ptr = params as *mut GVariant;
     unsafe {
-        g_variant_get(gvariant_ptr, format.as_ptr(), &full_paths);
+        g_variant_get(gvariant_ptr, format.as_ptr(), &mut full_paths as *mut _);
     }
 
     let paths = c_char_array_to_vec(full_paths);
@@ -1011,13 +1021,18 @@ unsafe extern "C" fn backend_search_files_thread(
     params: *mut _GVariant,
     _user_data: *mut c_void,
 ) -> () {
-    let search: *mut *const c_char = std::ptr::null_mut();
-    let filters: PkBitfield = 0;
+    let mut search: *mut *const c_char = std::ptr::null_mut();
+    let mut filters: PkBitfield = 0;
     let format = CString::new("(t^a&s)").pk_err(job);
     // Cast _GVariant to GVariant
     let gvariant_ptr = params as *mut GVariant;
     unsafe {
-        g_variant_get(gvariant_ptr, format.as_ptr(), &filters, &search);
+        g_variant_get(
+            gvariant_ptr,
+            format.as_ptr(),
+            &mut filters as *mut _,
+            &mut search as *mut _,
+        );
     }
 
     let backend = get_moss_client();
@@ -1087,13 +1102,18 @@ unsafe extern "C" fn backend_search_details_thread(
     params: *mut _GVariant,
     _user_data: *mut c_void,
 ) -> () {
-    let search: *mut *const c_char = std::ptr::null_mut();
-    let filters: PkBitfield = 0;
+    let mut search: *mut *const c_char = std::ptr::null_mut();
+    let mut filters: PkBitfield = 0;
     let format = CString::new("(t^a&s)").pk_err(job);
     // Cast _GVariant to GVariant
     let gvariant_ptr = params as *mut GVariant;
     unsafe {
-        g_variant_get(gvariant_ptr, format.as_ptr(), &filters, &search);
+        g_variant_get(
+            gvariant_ptr,
+            format.as_ptr(),
+            &mut filters as *mut _,
+            &mut search as *mut _,
+        );
     }
 
     let backend = get_moss_client();
@@ -1171,13 +1191,18 @@ unsafe extern "C" fn backend_search_names_thread(
     params: *mut _GVariant,
     _user_data: *mut c_void,
 ) -> () {
-    let search: *mut *const c_char = std::ptr::null_mut();
-    let filters: PkBitfield = 0;
+    let mut search: *mut *const c_char = std::ptr::null_mut();
+    let mut filters: PkBitfield = 0;
     let format = CString::new("(t^a&s)").unwrap();
     // Cast _GVariant to GVariant
     let gvariant_ptr = params as *mut GVariant;
     unsafe {
-        g_variant_get(gvariant_ptr, format.as_ptr(), &filters, &search);
+        g_variant_get(
+            gvariant_ptr,
+            format.as_ptr(),
+            &mut filters as *mut _,
+            &mut search as *mut _,
+        );
     }
 
     let backend = get_moss_client();
@@ -1257,27 +1282,21 @@ unsafe extern "C" fn backend_remove_packages_thread(
     params: *mut _GVariant,
     _user_data: *mut c_void,
 ) -> () {
-    //	PkBitfield transaction_flags = 0;
-    //	gboolean autoremove = false;
-    //	gboolean allow_deps = false;
-    //	gchar **package_ids;
-    //	g_variant_get(params, "(t^a&sbb)", &transaction_flags, &package_ids, &allow_deps, &autoremove);
-
-    let package_ids: *mut *const c_char = std::ptr::null_mut();
-    let transaction_flags: PkBitfield = 0;
-    let allow_deps: i32 = 0;
-    let autoremove: i32 = 0;
-    let format = CString::new("(t^a&sbb)").unwrap();
+    let mut package_ids: *mut *const c_char = std::ptr::null_mut();
+    let mut transaction_flags: PkBitfield = 0;
+    let mut allow_deps: i32 = 0;
+    let mut autoremove: i32 = 0;
+    let format = CString::new("(t^a&sbb)").pk_err(job);
     // Cast _GVariant to GVariant
     let gvariant_ptr = params as *mut GVariant;
     unsafe {
         g_variant_get(
             gvariant_ptr,
             format.as_ptr(),
-            &transaction_flags,
-            &package_ids,
-            &allow_deps,
-            &autoremove,
+            &mut transaction_flags as *mut _,
+            &mut package_ids as *mut _,
+            &mut allow_deps as *mut _,
+            &mut autoremove as *mut _,
         );
     }
 
@@ -1437,17 +1456,17 @@ unsafe extern "C" fn backend_install_packages_thread(
     params: *mut _GVariant,
     _user_data: *mut c_void,
 ) -> () {
-    let package_ids: *mut *const c_char = std::ptr::null_mut();
-    let transaction_flags: PkBitfield = 0;
-    let format = CString::new("(t^a&s)").unwrap();
+    let mut package_ids: *mut *const c_char = std::ptr::null_mut();
+    let mut transaction_flags: PkBitfield = 0;
+    let format = CString::new("(t^a&s)").pk_err(job);
     // Cast _GVariant to GVariant
     let gvariant_ptr = params as *mut GVariant;
     unsafe {
         g_variant_get(
             gvariant_ptr,
             format.as_ptr(),
-            &transaction_flags,
-            &package_ids,
+            &mut transaction_flags as *mut _,
+            &mut package_ids as *mut _,
         );
     }
 
@@ -1737,8 +1756,8 @@ unsafe extern "C" fn backend_update_packages_thread(
     params: *mut _GVariant,
     _user_data: *mut c_void,
 ) -> () {
-    let package_ids: *mut *const c_char = std::ptr::null_mut();
-    let transaction_flags: PkBitfield = 0;
+    let mut package_ids: *mut *const c_char = std::ptr::null_mut();
+    let mut transaction_flags: PkBitfield = 0;
     let format = CString::new("(t^a&s)").pk_err(job);
     // Cast _GVariant to GVariant
     let gvariant_ptr = params as *mut GVariant;
@@ -1746,8 +1765,8 @@ unsafe extern "C" fn backend_update_packages_thread(
         g_variant_get(
             gvariant_ptr,
             format.as_ptr(),
-            &transaction_flags,
-            &package_ids,
+            &mut transaction_flags as *mut _,
+            &mut package_ids as *mut _,
         );
     }
 
@@ -1974,12 +1993,12 @@ unsafe extern "C" fn backend_get_update_detail_thread(
     params: *mut _GVariant,
     _user_data: *mut c_void,
 ) -> () {
-    let package_ids: *mut *const c_char = std::ptr::null_mut();
-    let format = CString::new("(^a&s)").unwrap();
+    let mut package_ids: *mut *const c_char = std::ptr::null_mut();
+    let format = CString::new("(^a&s)").pk_err(job);
     // Cast _GVariant to GVariant
     let gvariant_ptr = params as *mut GVariant;
     unsafe {
-        g_variant_get(gvariant_ptr, format.as_ptr(), &package_ids);
+        g_variant_get(gvariant_ptr, format.as_ptr(), &mut package_ids as *mut _);
     }
 
     let backend = get_moss_client();
@@ -2043,12 +2062,12 @@ unsafe extern "C" fn backend_get_updates_thread(
     params: *mut _GVariant,
     _user_data: *mut c_void,
 ) -> () {
-    let mut _filters: PkBitfield = 0;
-    let format = CString::new("(t)").unwrap();
+    let mut filters: PkBitfield = 0;
+    let format = CString::new("(t)").pk_err(job);
     // Cast _GVariant to GVariant
     let gvariant_ptr = params as *mut GVariant;
     unsafe {
-        g_variant_get(gvariant_ptr, format.as_ptr(), &_filters);
+        g_variant_get(gvariant_ptr, format.as_ptr(), &mut filters as *mut _);
     }
 
     let backend = get_moss_client();
@@ -2107,12 +2126,12 @@ unsafe extern "C" fn backend_refresh_cache_thread(
     params: *mut _GVariant,
     _user_data: *mut c_void,
 ) -> () {
-    let mut _force: i32 = 0;
-    let format = CString::new("(b)").unwrap();
+    let mut force: i32 = 0;
+    let format = CString::new("(b)").pk_err(job);
     // Cast _GVariant to GVariant
     let gvariant_ptr = params as *mut GVariant;
     unsafe {
-        g_variant_get(gvariant_ptr, format.as_ptr(), &_force);
+        g_variant_get(gvariant_ptr, format.as_ptr(), &mut force as *mut _);
     }
 
     let backend = get_moss_client();
@@ -2414,7 +2433,7 @@ unsafe extern "C" fn pk_backend_get_repo_list(
     }
 }
 
-unsafe fn c_strings_to_vec_null_terminated(mut c_strings: *const *const c_char) -> Vec<String> {
+unsafe fn c_strings_to_vec_null_terminated(c_strings: *const *const c_char) -> Vec<String> {
     if c_strings.is_null() {
         return Vec::new();
     }

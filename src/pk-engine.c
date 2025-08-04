@@ -921,7 +921,7 @@ pk_engine_network_state_changed_cb (GNetworkMonitor *network_monitor,
 static void
 pk_engine_setup_file_monitors (PkEngine *engine)
 {
-	const gchar *filename = SYSCONFDIR "/PackageKit/PackageKit.conf";
+	const gchar *filename = DATADIR "/PackageKit/PackageKit.conf";
 	g_autoptr(GError) error = NULL;
 	g_autoptr(GFile) file_binary = NULL;
 	g_autoptr(GFile) file_conf = NULL;
@@ -2034,4 +2034,3 @@ pk_engine_new (GKeyFile *conf)
 			  G_CALLBACK (pk_engine_scheduler_changed_cb), engine);
 	return PK_ENGINE (engine);
 }
-

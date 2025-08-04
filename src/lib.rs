@@ -15,8 +15,8 @@ use std::sync::{
 use std::time::Duration;
 
 use eyre::Result;
-use ffi_convert::RawPointerConverter;
-use ffi_convert::{CReprOf, CStringArray};
+//use ffi_convert::RawPointerConverter;
+//use ffi_convert::{CReprOf, CStringArray};
 use fs_err::File;
 use itertools::Itertools;
 use moss::client::DownloadCallback;

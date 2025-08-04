@@ -9,13 +9,13 @@ crate-type = ["cdylib"]
 bindgen = "0.71.0"
 
 [dependencies]
-config = { path = "/home/ninya/aeryn/os-tools/crates/config" }
-moss = { path = "/home/ninya/aeryn/os-tools/moss" }
-stone = { path = "/home/ninya/aeryn/os-tools/crates/stone" }
-vfs = { path = "/home/ninya/aeryn/os-tools/crates/vfs" }
+config = { git = "https://github.com/joebonrichie/os-tools", rev="f6e6070", package="config" }
+moss = { git = "https://github.com/joebonrichie/os-tools", rev="f6e6070", package="moss" }
+stone = { git = "https://github.com/joebonrichie/os-tools", rev="f6e6070", package="stone" }
+vfs = { git = "https://github.com/joebonrichie/os-tools", rev="f6e6070", package="vfs" }
 glib-sys = "0.18"
 fs-err = "3.1.1"
 itertools = "0.14.0"
 url = "2.5.4"
-ffi-convert = "0.6.2"
+#ffi-convert = "0.6.2"
 eyre = "0.6.12"

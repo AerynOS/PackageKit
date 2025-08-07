@@ -28,12 +28,13 @@ use glib_sys::{G_LOG_LEVEL_DEBUG, g_log};
 
 mod packagekit;
 use packagekit::{
-    _GVariant, GKeyFile, PK_PACKAGE_ID_ARCH, PK_PACKAGE_ID_DATA, PK_PACKAGE_ID_NAME,
+    _GVariant, GError, GKeyFile, PK_PACKAGE_ID_ARCH, PK_PACKAGE_ID_DATA, PK_PACKAGE_ID_NAME,
     PK_PACKAGE_ID_VERSION, PkBackend, PkBackendJob, PkBitfield,
     PkErrorEnum_PK_ERROR_ENUM_FAILED_FINALISE, PkErrorEnum_PK_ERROR_ENUM_FAILED_INITIALIZATION,
     PkErrorEnum_PK_ERROR_ENUM_INTERNAL_ERROR, PkErrorEnum_PK_ERROR_ENUM_NOT_SUPPORTED,
     PkErrorEnum_PK_ERROR_ENUM_PACKAGE_ALREADY_INSTALLED,
-    PkErrorEnum_PK_ERROR_ENUM_PACKAGE_DOWNLOAD_FAILED, PkErrorEnum_PK_ERROR_ENUM_PACKAGE_NOT_FOUND,
+    PkErrorEnum_PK_ERROR_ENUM_PACKAGE_DOWNLOAD_FAILED,
+    PkErrorEnum_PK_ERROR_ENUM_PACKAGE_ID_INVALID, PkErrorEnum_PK_ERROR_ENUM_PACKAGE_NOT_FOUND,
     PkErrorEnum_PK_ERROR_ENUM_REPO_CONFIGURATION_ERROR, PkErrorEnum_PK_ERROR_ENUM_REPO_NOT_FOUND,
     PkFilterEnum_PK_FILTER_ENUM_INSTALLED, PkFilterEnum_PK_FILTER_ENUM_NEWEST,
     PkFilterEnum_PK_FILTER_ENUM_NOT_INSTALLED, PkFilterEnum_PK_FILTER_ENUM_NOT_NEWEST,
@@ -47,12 +48,13 @@ use packagekit::{
     PkStatusEnum_PK_STATUS_ENUM_UPDATE,
     PkTransactionFlagEnum_PK_TRANSACTION_FLAG_ENUM_ONLY_DOWNLOAD,
     PkTransactionFlagEnum_PK_TRANSACTION_FLAG_ENUM_SIMULATE,
-    PkUpdateStateEnum_PK_UPDATE_STATE_ENUM_UNKNOWN, pk_backend_job_details,
-    pk_backend_job_details_full, pk_backend_job_error_code, pk_backend_job_files,
-    pk_backend_job_finished, pk_backend_job_package, pk_backend_job_repo_detail,
-    pk_backend_job_set_item_progress, pk_backend_job_set_percentage, pk_backend_job_set_status,
-    pk_backend_job_thread_create, pk_backend_job_update_detail, pk_package_id_build,
-    pk_package_id_check, pk_package_id_split,
+    PkUpdateStateEnum_PK_UPDATE_STATE_ENUM_UNKNOWN, g_ptr_array_add, g_ptr_array_new_full,
+    pk_backend_job_details, pk_backend_job_details_full, pk_backend_job_error_code,
+    pk_backend_job_files, pk_backend_job_finished, pk_backend_job_package, pk_backend_job_packages,
+    pk_backend_job_repo_detail, pk_backend_job_set_item_progress, pk_backend_job_set_percentage,
+    pk_backend_job_set_status, pk_backend_job_thread_create, pk_backend_job_update_detail,
+    pk_debug_add_log_domain, pk_package_id_build, pk_package_id_check, pk_package_id_split,
+    pk_package_new, pk_package_set_id, pk_package_set_info, pk_package_set_summary,
 };
 
 use moss::{
@@ -189,8 +191,6 @@ fn get_moss_client() -> MossBackend {
 }
 
 /// Convert a moss package into a pk_package_id
-// TODO: shall we build up a full pk_backend_job_package here instead
-//       it'll need to have some filtering baked in
 fn moss_build_package_id_from_registry(pkg: &Package, client: &Client) -> Result<*mut c_char> {
     // Get the version of the pkg available in the repo plugin (remote)
     let available_pkg = client
@@ -279,6 +279,47 @@ fn moss_get_pkg_from_package_id(package_id: *const c_char, client: &Client) -> O
             }
         } else {
             None
+        }
+    }
+}
+
+/// Emit a vec of moss packages to a combined pk_backend_job_packages signal
+fn moss_emit_package_list(pkgs: Vec<Package>, client: &Client, job: *mut PkBackendJob) -> () {
+    let pk_packages = unsafe { g_ptr_array_new_full(pkgs.len() as u32, None) };
+    for pkg in pkgs {
+        let id = moss_build_package_id_from_registry(&pkg, &client).pk_err(job);
+
+        let pk_package = unsafe { pk_package_new() };
+        let error: *mut *mut GError = ptr::null_mut();
+
+        unsafe {
+            if pk_package_set_id(pk_package, id, error) == 0 {
+                // TODO: get the error
+                pk_backend_job_error_code(
+                    job,
+                    PkErrorEnum_PK_ERROR_ENUM_PACKAGE_ID_INVALID,
+                    CString::new(format!("Failed to set package ID: {:?}", id))
+                        .pk_err(job)
+                        .as_ptr(),
+                );
+                continue;
+            }
+            // TODO: Take the PkInfoEnum as a param instead so this helper can be used in more places
+            if pkg.flags.installed {
+                pk_package_set_info(pk_package, PkInfoEnum_PK_INFO_ENUM_INSTALLED);
+            } else {
+                pk_package_set_info(pk_package, PkInfoEnum_PK_INFO_ENUM_AVAILABLE);
+            }
+            pk_package_set_summary(
+                pk_package,
+                CString::new(pkg.meta.summary).pk_err(job).as_ptr(),
+            );
+            g_ptr_array_add(pk_packages, pk_package as *mut c_void);
+        }
+    }
+    unsafe {
+        if !pk_packages.is_null() && (*pk_packages).len > 0 {
+            pk_backend_job_packages(job, pk_packages);
         }
     }
 }
@@ -709,31 +750,17 @@ unsafe extern "C" fn backend_get_packages_thread(
     let is_newest = pk_bitfield_contain(filters, PkFilterEnum_PK_FILTER_ENUM_NEWEST)
         || pk_bitfield_contain(filters, PkFilterEnum_PK_FILTER_ENUM_NOT_NEWEST);
 
+    let mut pkgs_to_emit = Vec::new();
+
     let mut seen = HashSet::new();
     for pkg in client.registry.list(flags) {
         // We have to filter out the remote versions of packages which are already installed :(
         if is_newest || seen.insert(pkg.meta.name.to_string().clone()) {
-            let id = moss_build_package_id_from_registry(&pkg, &backend.client).pk_err(job);
-
-            unsafe {
-                if pkg.flags.installed {
-                    pk_backend_job_package(
-                        job,
-                        PkInfoEnum_PK_INFO_ENUM_INSTALLED,
-                        id,
-                        CString::new(pkg.meta.summary).pk_err(job).as_ptr(),
-                    );
-                } else {
-                    pk_backend_job_package(
-                        job,
-                        PkInfoEnum_PK_INFO_ENUM_AVAILABLE,
-                        id,
-                        CString::new(pkg.meta.summary).pk_err(job).as_ptr(),
-                    );
-                }
-            }
+            pkgs_to_emit.push(pkg);
         }
     }
+
+    moss_emit_package_list(pkgs_to_emit, client, job);
 }
 
 #[unsafe(no_mangle)]
@@ -790,6 +817,8 @@ unsafe extern "C" fn backend_resolve_thread(
     let is_newest = pk_bitfield_contain(filters, PkFilterEnum_PK_FILTER_ENUM_NEWEST)
         || pk_bitfield_contain(filters, PkFilterEnum_PK_FILTER_ENUM_NOT_NEWEST);
 
+    let mut pkgs_to_emit = Vec::new();
+
     let mut seen_installed = HashSet::new();
     for keyword in &search_terms {
         let matches: Vec<_> = client
@@ -814,26 +843,11 @@ unsafe extern "C" fn backend_resolve_thread(
             .collect();
 
         for pkg in matches {
-            let id = moss_build_package_id_from_registry(&pkg, &client).pk_err(job);
-            unsafe {
-                if pkg.flags.installed {
-                    pk_backend_job_package(
-                        job,
-                        PkInfoEnum_PK_INFO_ENUM_INSTALLED,
-                        id,
-                        CString::new(pkg.meta.summary).pk_err(job).as_ptr(),
-                    );
-                } else {
-                    pk_backend_job_package(
-                        job,
-                        PkInfoEnum_PK_INFO_ENUM_AVAILABLE,
-                        id,
-                        CString::new(pkg.meta.summary).pk_err(job).as_ptr(),
-                    );
-                }
-            }
+            pkgs_to_emit.push(pkg);
         }
     }
+
+    moss_emit_package_list(pkgs_to_emit, client, job);
 }
 
 #[unsafe(no_mangle)]
@@ -1053,6 +1067,8 @@ unsafe extern "C" fn backend_search_files_thread(
 
     let layouts = client.layout_db.all().pk_err(job);
 
+    let mut pkgs_to_emit = Vec::new();
+
     layouts
         .into_iter()
         .for_each(|(id, layout)| match layout.entry {
@@ -1062,32 +1078,15 @@ unsafe extern "C" fn backend_search_files_thread(
                 for keyword in &search_terms {
                     if file.contains(keyword) {
                         if let Some(pkg) = client.registry.by_id(&id).next() {
-                            let id = moss_build_package_id_from_registry(&pkg, &client).pk_err(job);
-                            unsafe {
-                                if pkg.flags.installed {
-                                    pk_backend_job_package(
-                                        job,
-                                        PkInfoEnum_PK_INFO_ENUM_INSTALLED,
-                                        id,
-                                        CString::new(pkg.meta.summary).pk_err(job).as_ptr(),
-                                    );
-                                // NOTE: this is currently useless as we don't have a remote files index
-                                //       for packages not installed
-                                } else {
-                                    pk_backend_job_package(
-                                        job,
-                                        PkInfoEnum_PK_INFO_ENUM_AVAILABLE,
-                                        id,
-                                        CString::new(pkg.meta.summary).pk_err(job).as_ptr(),
-                                    );
-                                }
-                            }
+                            pkgs_to_emit.push(pkg);
                         }
                     }
                 }
             }
             _ => {}
         });
+
+    moss_emit_package_list(pkgs_to_emit, client, job);
 }
 
 #[unsafe(no_mangle)]
@@ -1140,13 +1139,16 @@ unsafe extern "C" fn backend_search_details_thread(
         package::Flags::default()
     };
 
+    let mut pkgs_to_emit = Vec::new();
+
     let mut seen = HashSet::new();
     for keyword in &search_terms {
         let matches: Vec<_> = client
             .registry
             .by_keyword(keyword, flags)
-            .filter(|pkg| pkg.meta.name.to_string().contains(keyword))
-            //.sorted_by_key(|pkg| !pkg.flags.installed)
+            .filter(|pkg| {
+                pkg.meta.summary.contains(keyword) || pkg.meta.description.contains(keyword)
+            })
             .collect();
 
         // We have to filter out the remote versions of packages which are already installed :(
@@ -1156,27 +1158,12 @@ unsafe extern "C" fn backend_search_details_thread(
             || pk_bitfield_contain(filters, PkFilterEnum_PK_FILTER_ENUM_NOT_NEWEST);
         for pkg in matches {
             if is_newest || seen.insert(pkg.meta.name.to_string().clone()) {
-                let id = moss_build_package_id_from_registry(&pkg, &client).pk_err(job);
-                unsafe {
-                    if pkg.flags.installed {
-                        pk_backend_job_package(
-                            job,
-                            PkInfoEnum_PK_INFO_ENUM_INSTALLED,
-                            id,
-                            CString::new(pkg.meta.summary).pk_err(job).as_ptr(),
-                        );
-                    } else {
-                        pk_backend_job_package(
-                            job,
-                            PkInfoEnum_PK_INFO_ENUM_AVAILABLE,
-                            id,
-                            CString::new(pkg.meta.summary).pk_err(job).as_ptr(),
-                        );
-                    }
-                }
+                pkgs_to_emit.push(pkg);
             }
         }
     }
+
+    moss_emit_package_list(pkgs_to_emit, client, job);
 }
 
 #[unsafe(no_mangle)]
@@ -1229,13 +1216,14 @@ unsafe extern "C" fn backend_search_names_thread(
         package::Flags::default()
     };
 
+    let mut pkgs_to_emit = Vec::new();
+
     let mut seen = HashSet::new();
     for keyword in &search_terms {
         let matches: Vec<_> = client
             .registry
             .by_keyword(keyword, flags)
             .filter(|pkg| pkg.meta.name.to_string().contains(keyword))
-            //.sorted_by_key(|pkg| !pkg.flags.installed)
             .collect();
 
         // We have to filter out the remote versions of packages which
@@ -1247,27 +1235,12 @@ unsafe extern "C" fn backend_search_names_thread(
             || pk_bitfield_contain(filters, PkFilterEnum_PK_FILTER_ENUM_NOT_NEWEST);
         for pkg in matches {
             if is_newest || seen.insert(pkg.meta.name.to_string().clone()) {
-                let id = moss_build_package_id_from_registry(&pkg, &client).pk_err(job);
-                unsafe {
-                    if pkg.flags.installed {
-                        pk_backend_job_package(
-                            job,
-                            PkInfoEnum_PK_INFO_ENUM_INSTALLED,
-                            id,
-                            CString::new(pkg.meta.summary).pk_err(job).as_ptr(),
-                        );
-                    } else {
-                        pk_backend_job_package(
-                            job,
-                            PkInfoEnum_PK_INFO_ENUM_AVAILABLE,
-                            id,
-                            CString::new(pkg.meta.summary).pk_err(job).as_ptr(),
-                        );
-                    }
-                }
+                pkgs_to_emit.push(pkg);
             }
         }
     }
+
+    moss_emit_package_list(pkgs_to_emit, client, job);
 }
 
 #[unsafe(no_mangle)]

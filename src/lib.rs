@@ -4,7 +4,6 @@
 
 use std::collections::{BTreeSet, HashSet};
 use std::ffi::{CStr, CString, c_void};
-use std::fmt;
 use std::os::raw::c_char;
 use std::path::Path;
 use std::ptr;
@@ -13,6 +12,7 @@ use std::sync::{
     atomic::{AtomicPtr, Ordering},
 };
 use std::time::Duration;
+use std::{fmt, u64};
 
 use eyre::Result;
 //use ffi_convert::RawPointerConverter;
@@ -545,6 +545,7 @@ unsafe extern "C" fn backend_get_details_local_thread(
         let mut pkg_license: Option<String> = None;
         let mut pkg_desc: Option<String> = None;
         let mut pkg_homepage: Option<String> = None;
+        let mut pkg_dlsize: Option<u64> = None;
 
         for payload in payloads.flatten() {
             match payload {
@@ -615,6 +616,15 @@ unsafe extern "C" fn backend_get_details_local_thread(
                                     _ => {}
                                 }
                             }
+                            meta::Tag::PackageSize => {
+                                let kind = record.kind.clone();
+                                match kind {
+                                    meta::Kind::Uint64(u) => {
+                                        pkg_dlsize = Some(u);
+                                    }
+                                    _ => {}
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -638,7 +648,7 @@ unsafe extern "C" fn backend_get_details_local_thread(
                 c_arch.as_ptr(),
                 CString::new(pkg_status).unwrap().as_ptr(),
             );
-            pk_backend_job_details(
+            pk_backend_job_details_full(
                 job,
                 id,
                 c_sum.as_ptr(),
@@ -647,6 +657,7 @@ unsafe extern "C" fn backend_get_details_local_thread(
                 c_desc.as_ptr(),
                 c_home.as_ptr(),
                 u64::MAX, // FIXME: No way to get installed size of a package? NOTE: will print unknown once this lands https://github.com/PackageKit/PackageKit/pull/851,
+                pkg_dlsize.unwrap_or(u64::MAX),
             )
         }
     }

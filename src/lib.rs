@@ -19,20 +19,27 @@ use eyre::Result;
 //use ffi_convert::{CReprOf, CStringArray};
 use fs_err::File;
 use itertools::Itertools;
-use moss::client::DownloadCallback;
-use url::Url;
 
 use glib_sys::GVariant;
 use glib_sys::g_variant_get;
 use glib_sys::{G_LOG_LEVEL_DEBUG, g_log};
 
 mod packagekit;
+use moss::{
+    Installation, Package, Provider, Repository,
+    client::{Client, ProgressStage, fetch::DownloadCallback},
+    environment,
+    package::Flags,
+    package::{self, Id},
+    registry::transaction,
+    repository::{self, Priority},
+    runtime,
+};
 use packagekit::{
     _GVariant, GError, GKeyFile, PK_PACKAGE_ID_ARCH, PK_PACKAGE_ID_DATA, PK_PACKAGE_ID_NAME,
     PK_PACKAGE_ID_VERSION, PkBackend, PkBackendJob, PkBitfield,
-    PkErrorEnum_PK_ERROR_ENUM_FAILED_FINALISE, PkErrorEnum_PK_ERROR_ENUM_FAILED_INITIALIZATION,
-    PkErrorEnum_PK_ERROR_ENUM_INTERNAL_ERROR, PkErrorEnum_PK_ERROR_ENUM_NOT_SUPPORTED,
-    PkErrorEnum_PK_ERROR_ENUM_PACKAGE_ALREADY_INSTALLED,
+    PkErrorEnum_PK_ERROR_ENUM_FAILED_INITIALIZATION, PkErrorEnum_PK_ERROR_ENUM_INTERNAL_ERROR,
+    PkErrorEnum_PK_ERROR_ENUM_NOT_SUPPORTED, PkErrorEnum_PK_ERROR_ENUM_PACKAGE_ALREADY_INSTALLED,
     PkErrorEnum_PK_ERROR_ENUM_PACKAGE_DOWNLOAD_FAILED,
     PkErrorEnum_PK_ERROR_ENUM_PACKAGE_ID_INVALID, PkErrorEnum_PK_ERROR_ENUM_PACKAGE_NOT_FOUND,
     PkErrorEnum_PK_ERROR_ENUM_REPO_CONFIGURATION_ERROR, PkErrorEnum_PK_ERROR_ENUM_REPO_NOT_FOUND,
@@ -49,28 +56,17 @@ use packagekit::{
     PkTransactionFlagEnum_PK_TRANSACTION_FLAG_ENUM_ONLY_DOWNLOAD,
     PkTransactionFlagEnum_PK_TRANSACTION_FLAG_ENUM_SIMULATE,
     PkUpdateStateEnum_PK_UPDATE_STATE_ENUM_UNKNOWN, g_ptr_array_add, g_ptr_array_new_full,
-    pk_backend_job_details, pk_backend_job_details_full, pk_backend_job_error_code,
-    pk_backend_job_files, pk_backend_job_finished, pk_backend_job_package, pk_backend_job_packages,
+    pk_backend_job_details_full, pk_backend_job_error_code, pk_backend_job_files,
+    pk_backend_job_finished, pk_backend_job_package, pk_backend_job_packages,
     pk_backend_job_repo_detail, pk_backend_job_set_item_progress, pk_backend_job_set_percentage,
     pk_backend_job_set_status, pk_backend_job_thread_create, pk_backend_job_update_detail,
-    pk_debug_add_log_domain, pk_package_id_build, pk_package_id_check, pk_package_id_split,
-    pk_package_new, pk_package_set_id, pk_package_set_info, pk_package_set_summary,
+    pk_package_id_build, pk_package_id_check, pk_package_id_split, pk_package_new,
+    pk_package_set_id, pk_package_set_info, pk_package_set_summary,
 };
-
-use moss::{
-    Installation, Package, Provider, Repository,
-    client::{self, Client, ProgressStage, cache::UnpackedAsset},
-    environment,
-    package::Flags,
-    package::{self, Id},
-    registry::transaction,
-    repository::{self, Priority},
-    runtime,
-    state::Selection,
+use stone::{
+    StoneDecodedPayload, StonePayloadLayoutFile, StonePayloadMetaPrimitive, StonePayloadMetaTag,
 };
-use stone::payload::layout;
-use stone::payload::meta;
-use stone::read::PayloadKind;
+use url::Url;
 use vfs::tree::BlitFile;
 
 //include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
@@ -193,22 +189,31 @@ fn get_moss_client() -> MossBackend {
 /// Convert a moss package into a pk_package_id
 fn moss_build_package_id_from_registry(pkg: &Package, client: &Client) -> Result<*mut c_char> {
     // Get the version of the pkg available in the repo plugin (remote)
-    let available_pkg = client
-        .registry
-        .by_name(&pkg.meta.name, package::Flags::default())
-        .filter(|p| !p.flags.installed)
-        .next();
+    //let available_pkg = client
+    //    .registry
+    //    .by_name(&pkg.meta.name, package::Flags::default())
+    //    .filter(|p| !p.flags.installed)
+    //    .next();
+
+    let available_pkg =
+        client.resolve_package_by_name(&pkg.meta.name, package::Flags::new().with_available())?;
 
     // We have to fully resolve by id to get origin and meta.uri fully
     // populated
-    let repo_resolved_pkg = if let Some(pkg) = available_pkg {
-        client
-            .registry
-            .by_id(&pkg.id)
-            .find(|pkg| !pkg.flags.installed)
-    } else {
-        None
-    };
+    //let repo_resolved_pkg = if let Some(pkg) = available_pkg {
+    //    client
+    //        .registry
+    //        .by_id(&pkg.id)
+    //        .find(|pkg| !pkg.flags.installed)
+    //} else {
+    //    None
+    //};
+
+    let repo_resolved_pkg = client
+        .resolve_package_by_id(&available_pkg.id)
+        .iter()
+        .find(|pkg| !pkg.flags.installed)
+        .cloned();
 
     let status = if pkg.flags.installed {
         match repo_resolved_pkg.and_then(|pkg| pkg.meta.origin) {
@@ -389,87 +394,67 @@ unsafe extern "C" fn backend_download_packages_thread(
     }
 
     let backend = get_moss_client();
-    let client = &backend.client;
-
-    let _guard = runtime::init();
+    let mut client = backend.client;
 
     let ids = c_char_array_to_vec(package_ids);
-    for (idx, id) in ids.iter().enumerate() {
-        let c_id = CString::new(id.clone()).pk_err(job);
-        if let Some(pkg) = moss_get_pkg_from_package_id(c_id.as_ptr(), client) {
-            // NOTE: we'll re-resolve to ensure we get the available in the repo version, in case the pkg is
-            //       already installed. Next, we need to re-resolve the pkg against the registry to get the
-            //       full meta.uri otherwise we just get the endix path missing the index base uri.
-            //       Is this horrible and stupid? Yes.
-            let available_pkg = client
-                .registry
-                .by_name(&pkg.meta.name, package::Flags::new().with_available())
-                .filter(|p| !p.flags.installed)
-                .next()
-                .unwrap();
-            let full_pkg = client.registry.by_id(&available_pkg.id).next().unwrap();
-            match runtime::block_on(async {
-                client::cache::fetch(&full_pkg.meta, &backend.installation, {
-                    let package_id = c_id.clone();
-                    let id_len = ids.len().clone();
-                    //log_debug!("Attempting to download {:?}", full_pkg.meta.uri);
-                    move |progress: moss::client::cache::Progress| {
-                        let item_percentage = progress.pct();
-                        let pk_percentage = (item_percentage * 100.0).floor() as u32;
+    let ids_len = ids.len();
 
-                        let global_pct = ((idx as f32) + item_percentage) / (id_len as f32);
+    let job_atomic = Arc::new(AtomicPtr::new(job));
+    let job_clone = job_atomic.clone();
+
+    for (idx, id) in ids.iter().enumerate() {
+        let job_clone = job_clone.clone();
+        let c_id = CString::new(id.clone()).pk_err(job);
+        let id_clone = id.clone();
+        match client.fetch(
+            &vec![id.as_str()],
+            Path::new("."),
+            false,
+            Some(Arc::new(move |download_callback| {
+                let job_ptr = job_clone.load(Ordering::Relaxed);
+                match download_callback {
+                    DownloadCallback::Current(_pkg, pct) => {
+                        let c_id = CString::new(id_clone.clone()).pk_err(job_ptr);
+                        let pk_percentage = (pct * 100.0).floor() as u32;
+                        let global_pct = ((idx as f32) + pct) / (ids_len as f32);
                         let global_percentage = (global_pct * 100.0).floor() as u32;
+                        unsafe {
+                            pk_backend_job_set_percentage(job_ptr, global_percentage);
+                        }
 
                         unsafe {
                             pk_backend_job_set_item_progress(
-                                job,
-                                package_id.as_ptr(),
+                                job_ptr,
+                                c_id.as_ptr(),
                                 PkInfoEnum_PK_INFO_ENUM_DOWNLOADING,
                                 pk_percentage,
                             );
-                            pk_backend_job_set_percentage(job, global_percentage);
                         }
                     }
-                })
-                .await
-            }) {
-                Ok(download) => {
-                    unsafe {
-                        // God this is horrible
-                        let rust_dir = Path::new(CStr::from_ptr(directory).to_str().pk_err(job));
-
-                        let parsed = Url::parse(&full_pkg.meta.uri.unwrap()).pk_err(job);
-                        let filename = parsed.path_segments().and_then(|segments| segments.last());
-                        let target = rust_dir.join(&filename.unwrap());
-
-                        std::fs::rename(download.path, &target).pk_err(job);
-
-                        let target_vec = vec![target.as_path().to_str().unwrap().to_string()];
-                        let mut c_target = OurCStringArray::from_vec(target_vec);
-
-                        pk_backend_job_files(job, c_id.as_ptr(), c_target.as_ptr());
-                    }
+                    DownloadCallback::Overall(_) => todo!(),
                 }
-                Err(e) => {
-                    let c_err = CString::new(e.to_string()).pk_err(job);
-                    unsafe {
-                        pk_backend_job_error_code(
-                            job,
-                            PkErrorEnum_PK_ERROR_ENUM_PACKAGE_DOWNLOAD_FAILED,
-                            c_err.as_ptr(),
-                        );
-                    }
+            })),
+        ) {
+            Ok((paths, _)) => {
+                let mut c_target = OurCStringArray::from_vec(
+                    paths
+                        .iter()
+                        .map(|p| p.to_string_lossy().to_string().to_owned()),
+                );
+
+                unsafe {
+                    pk_backend_job_files(job, c_id.as_ptr(), c_target.as_ptr());
                 }
             }
-        } else {
-            unsafe {
-                pk_backend_job_error_code(
-                    job,
-                    PkErrorEnum_PK_ERROR_ENUM_PACKAGE_NOT_FOUND,
-                    CString::new(format!("Failed to find package {:?}", id))
-                        .pk_err(job)
-                        .as_ptr(),
-                );
+            Err(e) => {
+                let c_err = CString::new(e.to_string()).pk_err(job);
+                unsafe {
+                    pk_backend_job_error_code(
+                        job,
+                        PkErrorEnum_PK_ERROR_ENUM_PACKAGE_DOWNLOAD_FAILED,
+                        c_err.as_ptr(),
+                    );
+                }
             }
         }
     }
@@ -527,7 +512,7 @@ unsafe extern "C" fn backend_get_details_thread(
                     PkGroupEnum_PK_GROUP_ENUM_UNKNOWN,
                     c_desc.as_ptr(),
                     c_url.as_ptr(),
-                    u64::MAX, // FIXME: No way to get installed size of a package? NOTE: will print unknown once this lands https://github.com/PackageKit/PackageKit/pull/851
+                    u64::MAX, // FIXME: No way to get installed size of a package?
                     pkg.meta.download_size.unwrap_or_else(|| u64::MAX),
                 );
             }
@@ -590,77 +575,77 @@ unsafe extern "C" fn backend_get_details_local_thread(
 
         for payload in payloads.flatten() {
             match payload {
-                PayloadKind::Meta(meta) => {
+                StoneDecodedPayload::Meta(meta) => {
                     for record in meta.body {
                         match &record.tag {
                             // HOLY MOTHER OF NESTING, BETTER WAY!?
-                            meta::Tag::Name => {
-                                let kind = record.kind.clone();
+                            StonePayloadMetaTag::Name => {
+                                let kind = record.primitive;
                                 match kind {
-                                    meta::Kind::String(s) => {
+                                    StonePayloadMetaPrimitive::String(s) => {
                                         pkg_name = Some(s);
                                     }
                                     _ => {}
                                 }
                             }
-                            meta::Tag::Version => {
-                                let kind = record.kind.clone();
+                            StonePayloadMetaTag::Version => {
+                                let kind = record.primitive;
                                 match kind {
-                                    meta::Kind::String(s) => {
+                                    StonePayloadMetaPrimitive::String(s) => {
                                         pkg_arch = Some(s);
                                     }
                                     _ => {}
                                 }
                             }
-                            meta::Tag::Architecture => {
-                                let kind = record.kind.clone();
+                            StonePayloadMetaTag::Architecture => {
+                                let kind = record.primitive;
                                 match kind {
-                                    meta::Kind::String(s) => {
+                                    StonePayloadMetaPrimitive::String(s) => {
                                         pkg_ver = Some(s);
                                     }
                                     _ => {}
                                 }
                             }
-                            meta::Tag::Summary => {
-                                let kind = record.kind.clone();
+                            StonePayloadMetaTag::Summary => {
+                                let kind = record.primitive;
                                 match kind {
-                                    meta::Kind::String(s) => {
+                                    StonePayloadMetaPrimitive::String(s) => {
                                         pkg_summary = Some(s);
                                     }
                                     _ => {}
                                 }
                             }
-                            meta::Tag::License => {
-                                let kind = record.kind.clone();
+                            StonePayloadMetaTag::License => {
+                                let kind = record.primitive;
                                 match kind {
-                                    meta::Kind::String(s) => {
+                                    StonePayloadMetaPrimitive::String(s) => {
                                         pkg_license = Some(s);
                                     }
                                     _ => {}
                                 }
                             }
-                            meta::Tag::Description => {
-                                let kind = record.kind.clone();
+                            StonePayloadMetaTag::Description => {
+                                let kind = record.primitive;
                                 match kind {
-                                    meta::Kind::String(s) => {
+                                    StonePayloadMetaPrimitive::String(s) => {
                                         pkg_desc = Some(s);
                                     }
                                     _ => {}
                                 }
                             }
-                            meta::Tag::Homepage => {
-                                let kind = record.kind.clone();
+                            StonePayloadMetaTag::Homepage => {
+                                let kind = record.primitive;
                                 match kind {
-                                    meta::Kind::String(s) => {
+                                    StonePayloadMetaPrimitive::String(s) => {
                                         pkg_homepage = Some(s);
                                     }
                                     _ => {}
                                 }
                             }
-                            meta::Tag::PackageSize => {
-                                let kind = record.kind.clone();
+                            StonePayloadMetaTag::PackageSize => {
+                                let kind = record.primitive;
                                 match kind {
-                                    meta::Kind::Uint64(u) => {
+                                    StonePayloadMetaPrimitive::Uint64(u) => {
                                         pkg_dlsize = Some(u);
                                     }
                                     _ => {}
@@ -956,33 +941,33 @@ unsafe extern "C" fn backend_get_files_local_thread(
 
         for payload in payloads.flatten() {
             match payload {
-                PayloadKind::Layout(l) => layouts = l.body,
-                PayloadKind::Meta(meta) => {
+                StoneDecodedPayload::Layout(l) => layouts = l.body,
+                StoneDecodedPayload::Meta(meta) => {
                     for record in meta.body {
                         match &record.tag {
                             // HOLY MOTHER OF NESTING, BETTER WAY!?
-                            meta::Tag::Name => {
-                                let kind = record.kind.clone();
+                            StonePayloadMetaTag::Name => {
+                                let kind = record.primitive;
                                 match kind {
-                                    meta::Kind::String(s) => {
+                                    StonePayloadMetaPrimitive::String(s) => {
                                         pkg_name = Some(s);
                                     }
                                     _ => {}
                                 }
                             }
-                            meta::Tag::Version => {
-                                let kind = record.kind.clone();
+                            StonePayloadMetaTag::Version => {
+                                let kind = record.primitive;
                                 match kind {
-                                    meta::Kind::String(s) => {
+                                    StonePayloadMetaPrimitive::String(s) => {
                                         pkg_arch = Some(s);
                                     }
                                     _ => {}
                                 }
                             }
-                            meta::Tag::Architecture => {
-                                let kind = record.kind.clone();
+                            StonePayloadMetaTag::Architecture => {
+                                let kind = record.primitive;
                                 match kind {
-                                    meta::Kind::String(s) => {
+                                    StonePayloadMetaPrimitive::String(s) => {
                                         pkg_ver = Some(s);
                                     }
                                     _ => {}
@@ -1002,10 +987,12 @@ unsafe extern "C" fn backend_get_files_local_thread(
 
         let files = layouts
             .iter()
-            .filter_map(|file| match &file.entry {
-                layout::Entry::Regular(_, target)
-                | layout::Entry::Directory(target)
-                | layout::Entry::Symlink(_, target) => Some(format!("/usr/{}", target.clone())),
+            .filter_map(|file| match &file.file {
+                StonePayloadLayoutFile::Regular(_, target)
+                | StonePayloadLayoutFile::Directory(target)
+                | StonePayloadLayoutFile::Symlink(_, target) => {
+                    Some(format!("/usr/{}", target.clone()))
+                }
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -1065,16 +1052,16 @@ unsafe extern "C" fn backend_search_files_thread(
 
     let search_terms = c_char_array_to_vec(search);
 
-    let layouts = client.layout_db.all().pk_err(job);
+    let layouts = client.list_layouts().pk_err(job);
 
     let mut pkgs_to_emit = Vec::new();
 
     layouts
         .into_iter()
-        .for_each(|(id, layout)| match layout.entry {
-            stone::payload::layout::Entry::Regular(_, file)
-            | stone::payload::layout::Entry::Symlink(_, file)
-            | stone::payload::layout::Entry::Directory(file) => {
+        .for_each(|(id, layout)| match layout.file {
+            StonePayloadLayoutFile::Regular(_, file)
+            | StonePayloadLayoutFile::Symlink(_, file)
+            | StonePayloadLayoutFile::Directory(file) => {
                 for keyword in &search_terms {
                     if file.contains(keyword) {
                         if let Some(pkg) = client.registry.by_id(&id).next() {
@@ -1285,9 +1272,7 @@ unsafe extern "C" fn backend_remove_packages_thread(
     }
 
     let backend = get_moss_client();
-    let client = &backend.client;
-
-    let _guard = runtime::init();
+    let mut client = backend.client;
 
     unsafe {
         pk_backend_job_set_status(job, PkStatusEnum_PK_STATUS_ENUM_DEP_RESOLVE);
@@ -1299,7 +1284,7 @@ unsafe extern "C" fn backend_remove_packages_thread(
 
     for id in ids {
         let c_id = CString::new(id.clone()).pk_err(job);
-        if let Some(pkg) = moss_get_pkg_from_package_id(c_id.as_ptr(), client) {
+        if let Some(pkg) = moss_get_pkg_from_package_id(c_id.as_ptr(), &client) {
             resolved.push(pkg.id);
         } else {
             unsafe {
@@ -1320,10 +1305,7 @@ unsafe extern "C" fn backend_remove_packages_thread(
         .transaction(transaction::Lookup::InstalledOnly)
         .pk_err(job);
 
-    let installed = client
-        .registry
-        .list_installed(Flags::default())
-        .collect::<Vec<_>>();
+    let installed = client.registry.list_installed().collect::<Vec<_>>();
     let installed_ids = installed
         .iter()
         .map(|p| p.id.clone())
@@ -1355,64 +1337,36 @@ unsafe extern "C" fn backend_remove_packages_thread(
         pk_backend_job_set_status(job, PkStatusEnum_PK_STATUS_ENUM_REMOVE);
     }
 
-    let new_state_pkgs = {
-        let previous_selections = match client.installation.active_state {
-            Some(id) => client.state_db.get(id).unwrap().selections,
-            None => vec![],
-        };
-
-        finalized
-            .into_iter()
-            .map(|id| {
-                previous_selections
-                    .iter()
-                    .find(|s| s.package == id)
-                    .cloned()
-                    // Should be unreachable since new state from removal
-                    // is always a subset of the previous state
-                    .unwrap_or_else(|| {
-                        eprintln!("Unreachable: previous selection not found during removal for package {id:?}, marking as not explicit");
-
-                        Selection {
-                            package: id,
-                            explicit: false,
-                            reason: None,
-                        }
-                    })
-            })
-            .collect::<Vec<_>>()
-    };
+    let removed_str = removed
+        .iter()
+        .map(|p| p.meta.name.as_str())
+        .collect::<Vec<_>>();
 
     let job_atomic = Arc::new(AtomicPtr::new(job));
     let job_clone = job_atomic.clone();
 
-    match client.new_state(
-        &new_state_pkgs,
-        "Remove",
-        Some(Arc::new(move |percentage, stage| {
-            let job_ptr = job_clone.load(Ordering::Relaxed);
-            let adjusted_percentage = match stage {
-                ProgressStage::Blit => scale_percentage(percentage, 0.0, 50.0),
-                ProgressStage::Transaction => scale_percentage(percentage, 50.0, 70.0),
-                ProgressStage::System => scale_percentage(percentage, 70.0, 100.0),
-            };
-            unsafe {
-                pk_backend_job_set_percentage(job_ptr, adjusted_percentage as u32);
-            }
-        })),
-    ) {
-        Ok(_) => {}
-        Err(e) => {
-            let c_err = e.to_string();
-            unsafe {
-                pk_backend_job_error_code(
-                    job,
-                    PkErrorEnum_PK_ERROR_ENUM_FAILED_FINALISE,
-                    CString::new(c_err).pk_err(job).as_ptr(),
-                );
-            }
-        }
-    }
+    client
+        .remove(
+            &removed_str,
+            true,
+            false,
+            Some(Arc::new(move |percentage, stage| {
+                let job_ptr = job_clone.load(Ordering::Relaxed);
+                let adjusted_percentage = match stage {
+                    ProgressStage::Blit => scale_percentage(percentage, 0.0, 50.0),
+                    ProgressStage::Transaction => scale_percentage(percentage, 50.0, 70.0),
+                    ProgressStage::System => scale_percentage(percentage, 70.0, 100.0),
+                    ProgressStage::Resolve => todo!(),
+                    ProgressStage::Downloading => todo!(),
+                    ProgressStage::Caching => todo!(),
+                    ProgressStage::Boot => todo!(),
+                };
+                unsafe {
+                    pk_backend_job_set_percentage(job_ptr, adjusted_percentage as u32);
+                }
+            })),
+        )
+        .pk_err(job);
 }
 
 #[unsafe(no_mangle)]
@@ -1455,9 +1409,7 @@ unsafe extern "C" fn backend_install_packages_thread(
     }
 
     let backend = get_moss_client();
-    let client = &backend.client;
-
-    let _guard = runtime::init();
+    let mut client = backend.client;
 
     unsafe {
         pk_backend_job_set_status(job, PkStatusEnum_PK_STATUS_ENUM_DEP_RESOLVE);
@@ -1469,7 +1421,7 @@ unsafe extern "C" fn backend_install_packages_thread(
 
     for id in ids {
         let c_id = CString::new(id.clone()).pk_err(job);
-        if let Some(pkg) = moss_get_pkg_from_package_id(c_id.as_ptr(), client) {
+        if let Some(pkg) = moss_get_pkg_from_package_id(c_id.as_ptr(), &client) {
             resolved.push(pkg.id);
         } else {
             unsafe {
@@ -1492,10 +1444,7 @@ unsafe extern "C" fn backend_install_packages_thread(
 
     tx.add(resolved.clone()).pk_err(job);
     let tx_resolved = client.resolve_packages(tx.finalize()).pk_err(job);
-    let installed = client
-        .registry
-        .list_installed(Flags::default())
-        .collect::<Vec<_>>();
+    let installed = client.registry.list_installed().collect::<Vec<_>>();
     let is_installed = |p: &Package| installed.iter().any(|i| i.meta.name == p.meta.name);
     let missing = tx_resolved
         .iter()
@@ -1535,186 +1484,40 @@ unsafe extern "C" fn backend_install_packages_thread(
         pk_backend_job_set_status(job, PkStatusEnum_PK_STATUS_ENUM_DOWNLOAD);
     }
 
-    let job_atomic = Arc::new(AtomicPtr::new(job));
-    let job_clone = job_atomic.clone();
-
-    // TODO: check for already downloaded packages as cache_packages will needlessly
-    // unpack cached packages and re-add cached packages to the install_db and layout_db
-    match runtime::block_on(async {
-        client
-            .cache_packages(
-                &missing,
-                Some(Arc::new(move |callback| match callback {
-                    DownloadCallback::DownloadOverall(percentage) => {
-                        let job_ptr = job_clone.load(Ordering::Relaxed);
-                        let global_pk_pct = (percentage * 100.0).floor();
-                        unsafe {
-                            pk_backend_job_set_percentage(job_ptr, global_pk_pct as u32);
-                        }
-                    }
-                })),
-            )
-            .await
-    }) {
-        Ok(_) => {}
-        Err(e) => {
-            let c_err = e.to_string();
-            unsafe {
-                pk_backend_job_error_code(
-                    job,
-                    PkErrorEnum_PK_ERROR_ENUM_PACKAGE_DOWNLOAD_FAILED,
-                    CString::new(c_err).pk_err(job).as_ptr(),
-                );
-            }
-        }
-    }
-
-    //let mut cached: Vec<(Package, UnpackedAsset)> = Vec::new();
-    //
-    //// TODO: concurrent downloads like in moss, percentage calculation will be a
-    ////       bit wierd but we can do it probably
-    //for (idx, pkg) in missing.iter().enumerate() {
-    //    let c_id = moss_build_package_id_from_registry(pkg, &backend).pk_err(job);
-    //    let id_len = missing.len().clone();
-    //    let package_id = c_id.clone();
-    //    match runtime::block_on(async {
-    //        client::cache::fetch(&pkg.meta, &backend.installation, {
-    //            //log_debug!("Attempting to download {:?}", full_pkg.meta.uri);
-    //            move |progress: moss::client::cache::Progress| {
-    //                let item_pct = progress.pct();
-    //                let pk_item_pct = (item_pct * 100.0).floor() as u32;
-    //
-    //                let global_pct = ((idx as f32) + item_pct) / (id_len as f32);
-    //                let pk_global_pct = (global_pct * 100.0).floor() as u32;
-    //
-    //                unsafe {
-    //                    pk_backend_job_set_item_progress(
-    //                        job,
-    //                        package_id,
-    //                        PkInfoEnum_PK_INFO_ENUM_DOWNLOADING,
-    //                        pk_item_pct,
-    //                    );
-    //                    pk_backend_job_set_percentage(job, pk_global_pct);
-    //                }
-    //            }
-    //        })
-    //        .await
-    //    }) {
-    //        Ok(download) => {
-    //            let unpacking_in_progress = moss::client::cache::UnpackingInProgress::default();
-    //            let unpacked = download
-    //                .unpack(unpacking_in_progress, |_: moss::client::cache::Progress| {
-    //                    //let pk_item_pct = (item_pct * 100.0).floor() as u32;
-    //                    //let item_pct = progress.pct();
-    //                    //
-    //                    //let global_pct = ((idx as f32) + item_pct) / (id_len as f32);
-    //                    //let pk_global_pct = (global_pct * 100.0).floor() as u32;
-    //                    //
-    //                    //unsafe {
-    //                    //    pk_backend_job_set_item_progress(
-    //                    //        job,
-    //                    //        package_id,
-    //                    //        PkInfoEnum_PK_INFO_ENUM_DECOMPRESSING,
-    //                    //        pk_item_pct,
-    //                    //    );
-    //                    //    pk_backend_job_set_percentage(job, pk_global_pct);
-    //                    //}
-    //                })
-    //                .pk_err(job);
-    //            let package = (*pkg).clone();
-    //            cached.push((package, unpacked));
-    //        }
-    //        Err(e) => {
-    //            let c_err = CString::new(e.to_string()).pk_err(job);
-    //            unsafe {
-    //                pk_backend_job_error_code(
-    //                    job,
-    //                    PkErrorEnum_PK_ERROR_ENUM_PACKAGE_DOWNLOAD_FAILED,
-    //                    c_err.as_ptr(),
-    //                );
-    //            }
-    //        }
-    //    }
-    //}
-    //
-    //client
-    //    .layout_db
-    //    .batch_add(cached.iter().flat_map(|(p, u)| {
-    //        u.payloads
-    //            .iter()
-    //            .flat_map(PayloadKind::layout)
-    //            .flat_map(|p| p.body.as_slice())
-    //            .map(|layout| (&p.id, layout))
-    //    }))
-    //    .pk_err(job);
-    //
-    //client
-    //    .install_db
-    //    .batch_add(cached.into_iter().map(|(p, _)| (p.id, p.meta)).collect())
-    //    .pk_err(job);
-
-    if pk_bitfield_contain(
-        transaction_flags,
-        PkTransactionFlagEnum_PK_TRANSACTION_FLAG_ENUM_ONLY_DOWNLOAD,
-    ) {
-        return;
-    }
-
     unsafe {
         pk_backend_job_set_status(job, PkStatusEnum_PK_STATUS_ENUM_INSTALL);
     }
 
-    // Finally, Let's fucking install the thing
-    // TODO: it is possible to emit item_progress installing for each package?
-    let new_state_pkgs = {
-        // Only use previous state in stateful mode
-        let previous_selections = match client.installation.active_state {
-            Some(id) if !client.is_ephemeral() => client.state_db.get(id).pk_err(job).selections,
-            _ => vec![],
-        };
-        let missing_selections = missing.iter().map(|p| Selection {
-            package: p.id.clone(),
-            // Package is explicit if it was one of the input
-            // packages provided by the user
-            explicit: resolved.contains(&p.id),
-            reason: None,
-        });
-
-        missing_selections
-            .chain(previous_selections)
-            .collect::<Vec<_>>()
-    };
-
     let job_atomic = Arc::new(AtomicPtr::new(job));
     let job_clone = job_atomic.clone();
 
-    match client.new_state(
-        &new_state_pkgs,
-        "Install",
-        Some(Arc::new(move |percentage, stage| {
-            let job_ptr = job_clone.load(Ordering::Relaxed);
-            let adjusted_percentage = match stage {
-                ProgressStage::Blit => scale_percentage(percentage, 0.0, 50.0),
-                ProgressStage::Transaction => scale_percentage(percentage, 50.0, 70.0),
-                ProgressStage::System => scale_percentage(percentage, 70.0, 100.0),
-            };
-            unsafe {
-                pk_backend_job_set_percentage(job_ptr, adjusted_percentage as u32);
-            }
-        })),
-    ) {
-        Ok(_) => {}
-        Err(e) => {
-            let c_err = e.to_string();
-            unsafe {
-                pk_backend_job_error_code(
-                    job,
-                    PkErrorEnum_PK_ERROR_ENUM_FAILED_FINALISE,
-                    CString::new(c_err).pk_err(job).as_ptr(),
-                );
-            }
-        }
-    }
+    let packages = missing
+        .iter()
+        .map(|p| p.meta.name.as_str())
+        .collect::<Vec<_>>();
+
+    client
+        .install(
+            &packages,
+            true,
+            false,
+            Some(Arc::new(move |percentage, stage| {
+                let job_ptr = job_clone.load(Ordering::Relaxed);
+                let adjusted_percentage = match stage {
+                    ProgressStage::Blit => scale_percentage(percentage, 0.0, 50.0),
+                    ProgressStage::Transaction => scale_percentage(percentage, 50.0, 70.0),
+                    ProgressStage::System => scale_percentage(percentage, 70.0, 100.0),
+                    ProgressStage::Resolve => todo!(),
+                    ProgressStage::Downloading => todo!(),
+                    ProgressStage::Caching => todo!(),
+                    ProgressStage::Boot => todo!(),
+                };
+                unsafe {
+                    pk_backend_job_set_percentage(job_ptr, adjusted_percentage as u32);
+                }
+            })),
+        )
+        .pk_err(job);
 }
 
 #[unsafe(no_mangle)]
@@ -1755,78 +1558,56 @@ unsafe extern "C" fn backend_update_packages_thread(
     }
 
     let backend = get_moss_client();
-    let client = &backend.client;
+    let mut client = backend.client;
 
-    let _guard = runtime::init();
-
-    unsafe {
-        pk_backend_job_set_status(job, PkStatusEnum_PK_STATUS_ENUM_DEP_RESOLVE);
-    }
-
-    let mut resolved: Vec<Id> = Vec::new();
-
-    let ids = c_char_array_to_vec(package_ids);
-
-    for id in ids {
-        let c_id = CString::new(id.clone()).pk_err(job);
-        if let Some(pkg) = moss_get_pkg_from_package_id(c_id.as_ptr(), client) {
-            resolved.push(pkg.id);
-        } else {
-            unsafe {
-                pk_backend_job_error_code(
-                    job,
-                    PkErrorEnum_PK_ERROR_ENUM_PACKAGE_NOT_FOUND,
-                    CString::new(format!("Failed to find package {:?}", id))
-                        .pk_err(job)
-                        .as_ptr(),
-                );
-            }
+    let only_download = pk_bitfield_contain(
+        transaction_flags,
+        PkTransactionFlagEnum_PK_TRANSACTION_FLAG_ENUM_ONLY_DOWNLOAD,
+    );
+    if only_download {
+        unsafe {
+            pk_backend_job_set_status(job, PkStatusEnum_PK_STATUS_ENUM_DOWNLOAD);
         }
     }
 
-    let installed = client
-        .registry
-        .list_installed(package::Flags::default())
-        .collect::<Vec<_>>();
-    let all_ids = installed.iter().map(|p| &p.id).collect::<BTreeSet<_>>();
-
-    let finalized = installed
-        .iter()
-        .filter_map(|p| {
-            if !p.flags.explicit {
-                return None;
-            }
-            if let Some(lookup) = client
-                .registry
-                .by_name(&p.meta.name, package::Flags::new().with_available())
-                .next()
-            {
-                if !all_ids.contains(&lookup.id)
-                    && lookup.meta.source_release > p.meta.source_release
-                {
-                    return Some(lookup.id);
-                }
-            }
-            Some(p.id.clone())
-        })
-        .collect::<Vec<_>>();
-
-    let mut tx = client
-        .registry
-        .transaction(transaction::Lookup::PreferAvailable)
-        .unwrap();
-    tx.add(finalized).pk_err(job);
-    let synced = client.resolve_packages(tx.finalize()).pk_err(job);
-    let final_fucking_sync = synced
-        .iter()
-        .filter(|p| client.is_ephemeral() || !installed.iter().any(|i| i.id == p.id))
-        .collect::<Vec<_>>();
-
-    if pk_bitfield_contain(
+    let simulate = pk_bitfield_contain(
         transaction_flags,
         PkTransactionFlagEnum_PK_TRANSACTION_FLAG_ENUM_SIMULATE,
-    ) {
-        for pkg in final_fucking_sync.clone() {
+    );
+
+    unsafe {
+        pk_backend_job_set_status(job, PkStatusEnum_PK_STATUS_ENUM_UPDATE);
+    }
+
+    let job_atomic = Arc::new(AtomicPtr::new(job));
+    let job_clone = job_atomic.clone();
+
+    let (pkgs, _) = client
+        .sync(
+            None,
+            true,
+            simulate,
+            only_download,
+            Some(Arc::new(move |percentage, stage| {
+                let job_ptr = job_clone.load(Ordering::Relaxed);
+                let adjusted_percentage = match stage {
+                    ProgressStage::Blit => scale_percentage(percentage, 0.0, 50.0),
+                    ProgressStage::Transaction => scale_percentage(percentage, 50.0, 70.0),
+                    ProgressStage::System => scale_percentage(percentage, 70.0, 100.0),
+                    ProgressStage::Resolve => todo!(),
+                    ProgressStage::Downloading => todo!(),
+                    ProgressStage::Caching => todo!(),
+                    ProgressStage::Boot => todo!(),
+                };
+                unsafe {
+                    pk_backend_job_set_percentage(job_ptr, adjusted_percentage as u32);
+                }
+            })),
+        )
+        .pk_err(job);
+
+    if simulate {
+        for pkg in pkgs {
             unsafe {
                 let id = moss_build_package_id_from_registry(&pkg, &client).pk_err(job);
                 let c_summary = CString::new(pkg.meta.summary.clone()).unwrap();
@@ -1835,119 +1616,6 @@ unsafe extern "C" fn backend_update_packages_thread(
                     PkInfoEnum_PK_INFO_ENUM_UPDATING,
                     id,
                     c_summary.as_ptr(),
-                );
-            }
-        }
-        return;
-    }
-
-    unsafe {
-        pk_backend_job_set_status(job, PkStatusEnum_PK_STATUS_ENUM_DOWNLOAD);
-    }
-
-    let job_atomic = Arc::new(AtomicPtr::new(job));
-    let job_clone = job_atomic.clone();
-
-    match runtime::block_on(async {
-        client
-            .cache_packages(
-                &final_fucking_sync,
-                Some(Arc::new(move |callback| match callback {
-                    DownloadCallback::DownloadOverall(op) => {
-                        let pk_global_pct = (op * 100.0).floor() as u32;
-                        let job_ptr = job_clone.load(Ordering::Relaxed);
-                        unsafe {
-                            pk_backend_job_set_percentage(job_ptr, pk_global_pct);
-                        }
-                    }
-                })),
-            )
-            .await
-    }) {
-        Ok(_) => {}
-        Err(e) => {
-            let c_err = e.to_string();
-            unsafe {
-                pk_backend_job_error_code(
-                    job,
-                    PkErrorEnum_PK_ERROR_ENUM_PACKAGE_DOWNLOAD_FAILED,
-                    CString::new(c_err).pk_err(job).as_ptr(),
-                );
-            }
-        }
-    }
-    let only_download = pk_bitfield_contain(
-        transaction_flags,
-        PkTransactionFlagEnum_PK_TRANSACTION_FLAG_ENUM_ONLY_DOWNLOAD,
-    );
-    if only_download {
-        return;
-    }
-
-    unsafe {
-        pk_backend_job_set_status(job, PkStatusEnum_PK_STATUS_ENUM_UPDATE);
-    }
-
-    let new_selections = {
-        let previous_selections = match client.installation.active_state {
-            Some(id) => client.state_db.get(id).pk_err(job).selections,
-            None => vec![],
-        };
-
-        synced
-            .into_iter()
-            .map(|p| {
-                // Use old version id to lookup previous selection
-                let lookup_id = installed
-                    .iter()
-                    .find_map(|i| (i.meta.name == p.meta.name).then_some(&i.id))
-                    .unwrap_or(&p.id);
-
-                previous_selections
-                    .iter()
-                    .find(|s| s.package == *lookup_id)
-                    .cloned()
-                    // Use prev reason / explicit flag & new id
-                    .map(|s| Selection {
-                        package: p.id.clone(),
-                        ..s
-                    })
-                    // Must be transitive
-                    .unwrap_or(Selection {
-                        package: p.id,
-                        explicit: false,
-                        reason: None,
-                    })
-            })
-            .collect::<Vec<_>>()
-    };
-
-    let job_atomic = Arc::new(AtomicPtr::new(job));
-    let job_clone = job_atomic.clone();
-
-    match client.new_state(
-        &new_selections,
-        "Sync",
-        Some(Arc::new(move |percentage, stage| {
-            let job_ptr = job_clone.load(Ordering::Relaxed);
-            let adjusted_percentage = match stage {
-                ProgressStage::Blit => scale_percentage(percentage, 0.0, 50.0),
-                ProgressStage::Transaction => scale_percentage(percentage, 50.0, 70.0),
-                ProgressStage::System => scale_percentage(percentage, 70.0, 100.0),
-            };
-            unsafe {
-                pk_backend_job_set_percentage(job_ptr, adjusted_percentage as u32);
-            }
-        })),
-    ) {
-        Ok(_) => {}
-        Err(e) => {
-            let c_err = e.to_string();
-            unsafe {
-                pk_backend_job_error_code(
-                    job,
-                    PkErrorEnum_PK_ERROR_ENUM_FAILED_FINALISE,
-                    CString::new(c_err).pk_err(job).as_ptr(),
                 );
             }
         }
@@ -2125,8 +1793,6 @@ unsafe extern "C" fn backend_refresh_cache_thread(
         pk_backend_job_set_status(job, PkStatusEnum_PK_STATUS_ENUM_REFRESH_CACHE);
     }
 
-    let _guard = runtime::init();
-
     match repository::Manager::system(config, backend.installation.clone()) {
         Ok(manager) => {
             let repo_len = manager.list().len();
@@ -2204,8 +1870,6 @@ unsafe extern "C" fn pk_backend_repo_enable(
 
         let pk_id = repository::Id::new(&rid_str);
         let enabled: bool = enabled != 0;
-
-        let _guard = runtime::init();
 
         match repository::Manager::system(config, backend.installation.clone()) {
             Ok(mut manager) => {
@@ -2317,7 +1981,6 @@ unsafe extern "C" fn pk_backend_repo_set_data(
                             )
                             .unwrap();
                         // TODO: should we actually refresh the repo here or rely on refresh-cache?
-                        let _guard = runtime::init();
                         match runtime::block_on(manager.refresh(&pk_id)) {
                             Ok(_) => {}
                             Err(e) => {
@@ -2477,10 +2140,14 @@ pub struct OurCStringArray {
 
 impl OurCStringArray {
     /// Converts a Vec<String> to a CStringArray with null-terminated pointer array.
-    pub fn from_vec(strings: Vec<String>) -> Self {
+    pub fn from_vec<I, S>(strings: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<[u8]>,
+    {
         let cstrings: Vec<CString> = strings
             .into_iter()
-            .map(|s| CString::new(s).unwrap())
+            .map(|s| CString::new(s.as_ref()).unwrap())
             .collect();
 
         // Create vector of raw pointers

@@ -189,31 +189,22 @@ fn get_moss_client() -> MossBackend {
 /// Convert a moss package into a pk_package_id
 fn moss_build_package_id_from_registry(pkg: &Package, client: &Client) -> Result<*mut c_char> {
     // Get the version of the pkg available in the repo plugin (remote)
-    //let available_pkg = client
-    //    .registry
-    //    .by_name(&pkg.meta.name, package::Flags::default())
-    //    .filter(|p| !p.flags.installed)
-    //    .next();
-
-    let available_pkg =
-        client.resolve_package_by_name(&pkg.meta.name, package::Flags::new().with_available())?;
+    let available_pkg = client
+        .registry
+        .by_name(&pkg.meta.name, package::Flags::default())
+        .filter(|p| !p.flags.installed)
+        .next();
 
     // We have to fully resolve by id to get origin and meta.uri fully
     // populated
-    //let repo_resolved_pkg = if let Some(pkg) = available_pkg {
-    //    client
-    //        .registry
-    //        .by_id(&pkg.id)
-    //        .find(|pkg| !pkg.flags.installed)
-    //} else {
-    //    None
-    //};
-
-    let repo_resolved_pkg = client
-        .resolve_package_by_id(&available_pkg.id)
-        .iter()
-        .find(|pkg| !pkg.flags.installed)
-        .cloned();
+    let repo_resolved_pkg = if let Some(pkg) = available_pkg {
+        client
+            .registry
+            .by_id(&pkg.id)
+            .find(|pkg| !pkg.flags.installed)
+    } else {
+        None
+    };
 
     let status = if pkg.flags.installed {
         match repo_resolved_pkg.and_then(|pkg| pkg.meta.origin) {

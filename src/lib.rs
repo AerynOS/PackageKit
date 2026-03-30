@@ -56,7 +56,7 @@ use packagekit::{
     PkTransactionFlagEnum_PK_TRANSACTION_FLAG_ENUM_ONLY_DOWNLOAD,
     PkTransactionFlagEnum_PK_TRANSACTION_FLAG_ENUM_SIMULATE,
     PkUpdateStateEnum_PK_UPDATE_STATE_ENUM_UNKNOWN, g_ptr_array_add, g_ptr_array_new_full,
-    pk_backend_job_details_full, pk_backend_job_error_code, pk_backend_job_files,
+    pk_backend_job_details, pk_backend_job_error_code, pk_backend_job_files,
     pk_backend_job_finished, pk_backend_job_package, pk_backend_job_packages,
     pk_backend_job_repo_detail, pk_backend_job_set_item_progress, pk_backend_job_set_percentage,
     pk_backend_job_set_status, pk_backend_job_thread_create, pk_backend_job_update_detail,
@@ -504,7 +504,7 @@ unsafe extern "C" fn backend_get_details_thread(
             let c_desc = CString::new(pkg.meta.description).pk_err(job);
             let c_url = CString::new(pkg.meta.homepage).pk_err(job);
             unsafe {
-                pk_backend_job_details_full(
+                pk_backend_job_details(
                     job,
                     c_id.as_ptr(),
                     c_sum.as_ptr(),
@@ -674,7 +674,7 @@ unsafe extern "C" fn backend_get_details_local_thread(
                 c_arch.as_ptr(),
                 CString::new(pkg_status).unwrap().as_ptr(),
             );
-            pk_backend_job_details_full(
+            pk_backend_job_details(
                 job,
                 id,
                 c_sum.as_ptr(),

@@ -9,7 +9,6 @@
 #include <packagekit-glib2/pk-client-sync.h>
 #include <packagekit-glib2/pk-client.h>
 #include <packagekit-glib2/pk-common.h>
-#include <packagekit-glib2/pk-console-shared.h>
 #include <packagekit-glib2/pk-control-sync.h>
 #include <packagekit-glib2/pk-control.h>
 #include <packagekit-glib2/pk-debug.h>

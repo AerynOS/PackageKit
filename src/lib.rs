@@ -422,7 +422,9 @@ unsafe extern "C" fn backend_download_packages_thread(
                             );
                         }
                     }
-                    DownloadCallback::Overall(_) => todo!(),
+                    DownloadCallback::Overall(_) => {
+                        log_debug!("DownloadCallback::Overall not yet implemented")
+                    }
                 }
             })),
         ) {
@@ -1344,13 +1346,13 @@ unsafe extern "C" fn backend_remove_packages_thread(
             Some(Arc::new(move |percentage, stage| {
                 let job_ptr = job_clone.load(Ordering::Relaxed);
                 let adjusted_percentage = match stage {
-                    ProgressStage::Blit => scale_percentage(percentage, 0.0, 50.0),
+                    ProgressStage::Resolve => scale_percentage(percentage, 0.0, 20.0),
+                    ProgressStage::Downloading => scale_percentage(percentage, 20.0, 40.0),
+                    ProgressStage::Caching => scale_percentage(percentage, 40.0, 50.0),
+                    ProgressStage::Blit => scale_percentage(percentage, 20.0, 50.0),
                     ProgressStage::Transaction => scale_percentage(percentage, 50.0, 70.0),
-                    ProgressStage::System => scale_percentage(percentage, 70.0, 100.0),
-                    ProgressStage::Resolve => todo!(),
-                    ProgressStage::Downloading => todo!(),
-                    ProgressStage::Caching => todo!(),
-                    ProgressStage::Boot => todo!(),
+                    ProgressStage::System => scale_percentage(percentage, 70.0, 90.0),
+                    ProgressStage::Boot => scale_percentage(percentage, 90.0, 100.0),
                 };
                 unsafe {
                     pk_backend_job_set_percentage(job_ptr, adjusted_percentage as u32);
@@ -1495,13 +1497,13 @@ unsafe extern "C" fn backend_install_packages_thread(
             Some(Arc::new(move |percentage, stage| {
                 let job_ptr = job_clone.load(Ordering::Relaxed);
                 let adjusted_percentage = match stage {
-                    ProgressStage::Blit => scale_percentage(percentage, 0.0, 50.0),
+                    ProgressStage::Resolve => scale_percentage(percentage, 0.0, 20.0),
+                    ProgressStage::Downloading => scale_percentage(percentage, 20.0, 40.0),
+                    ProgressStage::Caching => scale_percentage(percentage, 40.0, 50.0),
+                    ProgressStage::Blit => scale_percentage(percentage, 20.0, 50.0),
                     ProgressStage::Transaction => scale_percentage(percentage, 50.0, 70.0),
-                    ProgressStage::System => scale_percentage(percentage, 70.0, 100.0),
-                    ProgressStage::Resolve => todo!(),
-                    ProgressStage::Downloading => todo!(),
-                    ProgressStage::Caching => todo!(),
-                    ProgressStage::Boot => todo!(),
+                    ProgressStage::System => scale_percentage(percentage, 70.0, 90.0),
+                    ProgressStage::Boot => scale_percentage(percentage, 90.0, 100.0),
                 };
                 unsafe {
                     pk_backend_job_set_percentage(job_ptr, adjusted_percentage as u32);
@@ -1582,13 +1584,13 @@ unsafe extern "C" fn backend_update_packages_thread(
             Some(Arc::new(move |percentage, stage| {
                 let job_ptr = job_clone.load(Ordering::Relaxed);
                 let adjusted_percentage = match stage {
-                    ProgressStage::Blit => scale_percentage(percentage, 0.0, 50.0),
+                    ProgressStage::Resolve => scale_percentage(percentage, 0.0, 20.0),
+                    ProgressStage::Downloading => scale_percentage(percentage, 20.0, 40.0),
+                    ProgressStage::Caching => scale_percentage(percentage, 40.0, 50.0),
+                    ProgressStage::Blit => scale_percentage(percentage, 20.0, 50.0),
                     ProgressStage::Transaction => scale_percentage(percentage, 50.0, 70.0),
-                    ProgressStage::System => scale_percentage(percentage, 70.0, 100.0),
-                    ProgressStage::Resolve => todo!(),
-                    ProgressStage::Downloading => todo!(),
-                    ProgressStage::Caching => todo!(),
-                    ProgressStage::Boot => todo!(),
+                    ProgressStage::System => scale_percentage(percentage, 70.0, 90.0),
+                    ProgressStage::Boot => scale_percentage(percentage, 90.0, 100.0),
                 };
                 unsafe {
                     pk_backend_job_set_percentage(job_ptr, adjusted_percentage as u32);

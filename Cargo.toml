@@ -9,10 +9,10 @@ crate-type = ["cdylib"]
 bindgen = "0.71.0"
 
 [dependencies]
-config = { git = "https://github.com/joebonrichie/os-tools", rev="48e1fab866df72e65234b90137450b027238d487", package="config" }
-moss = { git = "https://github.com/joebonrichie/os-tools", rev="48e1fab866df72e65234b90137450b027238d487", package="moss" }
-stone = { git = "https://github.com/joebonrichie/os-tools", rev="48e1fab866df72e65234b90137450b027238d487", package="stone" }
-vfs = { git = "https://github.com/joebonrichie/os-tools", rev="48e1fab866df72e65234b90137450b027238d487", package="vfs" }
+config = { git = "https://github.com/joebonrichie/os-tools", rev="6c533bed210bb7735fc0db6b2069b8195dee366b", package="config" }
+moss = { git = "https://github.com/joebonrichie/os-tools", rev="6c533bed210bb7735fc0db6b2069b8195dee366b", package="moss" }
+stone = { git = "https://github.com/joebonrichie/os-tools", rev="6c533bed210bb7735fc0db6b2069b8195dee366b", package="stone" }
+vfs = { git = "https://github.com/joebonrichie/os-tools", rev="6c533bed210bb7735fc0db6b2069b8195dee366b", package="vfs" }
 glib-sys = "0.18"
 fs-err = "3.1.1"
 itertools = "0.14.0"

@@ -112,7 +112,7 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 [[package]]
 name = "astr"
 version = "0.26.1"
-source = "git+https://github.com/joebonrichie/os-tools?rev=48e1fab866df72e65234b90137450b027238d487#48e1fab866df72e65234b90137450b027238d487"
+source = "git+https://github.com/joebonrichie/os-tools?rev=6c533bed210bb7735fc0db6b2069b8195dee366b#6c533bed210bb7735fc0db6b2069b8195dee366b"
 dependencies = [
  "diesel",
  "stable_deref_trait",
@@ -455,7 +455,7 @@ dependencies = [
 [[package]]
 name = "config"
 version = "0.26.1"
-source = "git+https://github.com/joebonrichie/os-tools?rev=48e1fab866df72e65234b90137450b027238d487#48e1fab866df72e65234b90137450b027238d487"
+source = "git+https://github.com/joebonrichie/os-tools?rev=6c533bed210bb7735fc0db6b2069b8195dee366b#6c533bed210bb7735fc0db6b2069b8195dee366b"
 dependencies = [
  "dirs",
  "fs-err",
@@ -485,7 +485,7 @@ checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 [[package]]
 name = "container"
 version = "0.26.1"
-source = "git+https://github.com/joebonrichie/os-tools?rev=48e1fab866df72e65234b90137450b027238d487#48e1fab866df72e65234b90137450b027238d487"
+source = "git+https://github.com/joebonrichie/os-tools?rev=6c533bed210bb7735fc0db6b2069b8195dee366b#6c533bed210bb7735fc0db6b2069b8195dee366b"
 dependencies = [
  "fs-err",
  "nc",
@@ -607,7 +607,7 @@ dependencies = [
 [[package]]
 name = "dag"
 version = "0.26.1"
-source = "git+https://github.com/joebonrichie/os-tools?rev=48e1fab866df72e65234b90137450b027238d487#48e1fab866df72e65234b90137450b027238d487"
+source = "git+https://github.com/joebonrichie/os-tools?rev=6c533bed210bb7735fc0db6b2069b8195dee366b#6c533bed210bb7735fc0db6b2069b8195dee366b"
 dependencies = [
  "petgraph",
 ]
@@ -934,7 +934,7 @@ dependencies = [
 [[package]]
 name = "fnmatch"
 version = "0.26.1"
-source = "git+https://github.com/joebonrichie/os-tools?rev=48e1fab866df72e65234b90137450b027238d487#48e1fab866df72e65234b90137450b027238d487"
+source = "git+https://github.com/joebonrichie/os-tools?rev=6c533bed210bb7735fc0db6b2069b8195dee366b#6c533bed210bb7735fc0db6b2069b8195dee366b"
 dependencies = [
  "regex",
  "serde_core",
@@ -1729,7 +1729,7 @@ dependencies = [
 [[package]]
 name = "moss"
 version = "0.26.1"
-source = "git+https://github.com/joebonrichie/os-tools?rev=48e1fab866df72e65234b90137450b027238d487#48e1fab866df72e65234b90137450b027238d487"
+source = "git+https://github.com/joebonrichie/os-tools?rev=6c533bed210bb7735fc0db6b2069b8195dee366b#6c533bed210bb7735fc0db6b2069b8195dee366b"
 dependencies = [
  "astr",
  "blsforme",
@@ -2657,7 +2657,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "stone"
 version = "0.26.1"
-source = "git+https://github.com/joebonrichie/os-tools?rev=48e1fab866df72e65234b90137450b027238d487#48e1fab866df72e65234b90137450b027238d487"
+source = "git+https://github.com/joebonrichie/os-tools?rev=6c533bed210bb7735fc0db6b2069b8195dee366b#6c533bed210bb7735fc0db6b2069b8195dee366b"
 dependencies = [
  "astr",
  "fs-err",
@@ -3001,7 +3001,7 @@ dependencies = [
 [[package]]
 name = "tools_buildinfo"
 version = "0.26.1"
-source = "git+https://github.com/joebonrichie/os-tools?rev=48e1fab866df72e65234b90137450b027238d487#48e1fab866df72e65234b90137450b027238d487"
+source = "git+https://github.com/joebonrichie/os-tools?rev=6c533bed210bb7735fc0db6b2069b8195dee366b#6c533bed210bb7735fc0db6b2069b8195dee366b"
 dependencies = [
  "chrono",
  "thiserror",
@@ -3130,7 +3130,7 @@ dependencies = [
 [[package]]
 name = "tracing_common"
 version = "0.26.1"
-source = "git+https://github.com/joebonrichie/os-tools?rev=48e1fab866df72e65234b90137450b027238d487#48e1fab866df72e65234b90137450b027238d487"
+source = "git+https://github.com/joebonrichie/os-tools?rev=6c533bed210bb7735fc0db6b2069b8195dee366b#6c533bed210bb7735fc0db6b2069b8195dee366b"
 dependencies = [
  "tracing",
  "tracing-subscriber",
@@ -3139,7 +3139,7 @@ dependencies = [
 [[package]]
 name = "triggers"
 version = "0.26.1"
-source = "git+https://github.com/joebonrichie/os-tools?rev=48e1fab866df72e65234b90137450b027238d487#48e1fab866df72e65234b90137450b027238d487"
+source = "git+https://github.com/joebonrichie/os-tools?rev=6c533bed210bb7735fc0db6b2069b8195dee366b#6c533bed210bb7735fc0db6b2069b8195dee366b"
 dependencies = [
  "dag",
  "fnmatch",
@@ -3162,7 +3162,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 [[package]]
 name = "tui"
 version = "0.26.1"
-source = "git+https://github.com/joebonrichie/os-tools?rev=48e1fab866df72e65234b90137450b027238d487#48e1fab866df72e65234b90137450b027238d487"
+source = "git+https://github.com/joebonrichie/os-tools?rev=6c533bed210bb7735fc0db6b2069b8195dee366b#6c533bed210bb7735fc0db6b2069b8195dee366b"
 dependencies = [
  "crossterm",
  "dialoguer",
@@ -3298,7 +3298,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "vfs"
 version = "0.1.0"
-source = "git+https://github.com/joebonrichie/os-tools?rev=48e1fab866df72e65234b90137450b027238d487#48e1fab866df72e65234b90137450b027238d487"
+source = "git+https://github.com/joebonrichie/os-tools?rev=6c533bed210bb7735fc0db6b2069b8195dee366b#6c533bed210bb7735fc0db6b2069b8195dee366b"
 dependencies = [
  "astr",
  "derive_more",

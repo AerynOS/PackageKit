@@ -69,7 +69,7 @@ use stone::{
 use url::Url;
 use vfs::tree::BlitFile;
 
-use crate::packagekit::PkInfoEnum_PK_INFO_ENUM_REMOVING;
+use crate::packagekit::{PkInfoEnum_PK_INFO_ENUM_INSTALLING, PkInfoEnum_PK_INFO_ENUM_REMOVING};
 
 //include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
@@ -1266,13 +1266,13 @@ unsafe extern "C" fn backend_remove_packages_thread(
         );
     }
 
-    let backend = get_moss_client();
-    let mut client = backend.client;
-
     let simulate = pk_bitfield_contain(
         transaction_flags,
         PkTransactionFlagEnum_PK_TRANSACTION_FLAG_ENUM_SIMULATE,
     );
+
+    let backend = get_moss_client();
+    let mut client = backend.client;
 
     let mut resolved = Vec::new();
     let ids = c_char_array_to_vec(package_ids);
@@ -1319,9 +1319,8 @@ unsafe extern "C" fn backend_remove_packages_thread(
                         }
                         scale_percentage(percentage, 0.0, 20.0)
                     }
-                    // We'll never recieve download/cache callbacks in a remove context
+                    // We'll never recieve download callbacks in a remove context
                     ProgressStage::Downloading => unreachable!(),
-                    ProgressStage::Caching => unreachable!(),
                     ProgressStage::Blit => {
                         unsafe {
                             pk_backend_job_set_status(job_ptr, PkStatusEnum_PK_STATUS_ENUM_REMOVE);
@@ -1397,18 +1396,19 @@ unsafe extern "C" fn backend_install_packages_thread(
     let backend = get_moss_client();
     let mut client = backend.client;
 
-    unsafe {
-        pk_backend_job_set_status(job, PkStatusEnum_PK_STATUS_ENUM_DEP_RESOLVE);
-    }
+    let simulate = pk_bitfield_contain(
+        transaction_flags,
+        PkTransactionFlagEnum_PK_TRANSACTION_FLAG_ENUM_SIMULATE,
+    );
 
-    let mut resolved: Vec<Id> = Vec::new();
+    let mut resolved = Vec::new();
 
     let ids = c_char_array_to_vec(package_ids);
 
     for id in ids {
         let c_id = CString::new(id.clone()).pk_err(job);
         if let Some(pkg) = moss_get_pkg_from_package_id(c_id.as_ptr(), &client) {
-            resolved.push(pkg.id);
+            resolved.push(pkg);
         } else {
             unsafe {
                 pk_backend_job_error_code(
@@ -1422,80 +1422,48 @@ unsafe extern "C" fn backend_install_packages_thread(
         }
     }
 
-    // Now, we'll create a moss transaction with our pkgs; this will pull in dependencies etc.
-    let mut tx = client
-        .registry
-        .transaction(transaction::Lookup::PreferInstalled)
-        .pk_err(job);
-
-    tx.add(resolved.clone()).pk_err(job);
-    let tx_resolved = client.resolve_packages(tx.finalize()).pk_err(job);
-    let installed = client.registry.list_installed().collect::<Vec<_>>();
-    let is_installed = |p: &Package| installed.iter().any(|i| i.meta.name == p.meta.name);
-    let missing = tx_resolved
-        .iter()
-        .filter(|p| client.is_ephemeral() || !is_installed(p))
-        .collect::<Vec<_>>();
-    if missing.is_empty() {
-        unsafe {
-            pk_backend_job_error_code(
-                job,
-                PkErrorEnum_PK_ERROR_ENUM_PACKAGE_ALREADY_INSTALLED,
-                CString::new("Package(s) already installed")
-                    .pk_err(job)
-                    .as_ptr(),
-            );
-        }
-    }
-
-    if pk_bitfield_contain(
-        transaction_flags,
-        PkTransactionFlagEnum_PK_TRANSACTION_FLAG_ENUM_SIMULATE,
-    ) {
-        for pkg in missing.clone() {
-            let id = moss_build_package_id_from_registry(&pkg, &client).pk_err(job);
-            let c_summary = CString::new(pkg.meta.summary.clone()).pk_err(job);
-            unsafe {
-                pk_backend_job_package(
-                    job,
-                    PkInfoEnum_PK_INFO_ENUM_INSTALL,
-                    id,
-                    c_summary.as_ptr(),
-                );
-            }
-        }
-        return;
-    }
-    unsafe {
-        pk_backend_job_set_status(job, PkStatusEnum_PK_STATUS_ENUM_DOWNLOAD);
-    }
-
-    unsafe {
-        pk_backend_job_set_status(job, PkStatusEnum_PK_STATUS_ENUM_INSTALL);
-    }
-
     let job_atomic = Arc::new(AtomicPtr::new(job));
     let job_clone = job_atomic.clone();
 
-    let packages = missing
+    let packages = resolved
         .iter()
         .map(|p| p.meta.name.as_str())
         .collect::<Vec<_>>();
 
-    client
+    let (pkgs, _) = client
         .install(
             &packages,
             true,
-            false,
+            simulate,
             Some(Arc::new(move |percentage, stage| {
                 let job_ptr = job_clone.load(Ordering::Relaxed);
                 let adjusted_percentage = match stage {
-                    ProgressStage::Resolve => scale_percentage(percentage, 0.0, 20.0),
-                    ProgressStage::Downloading => scale_percentage(percentage, 20.0, 40.0),
-                    ProgressStage::Caching => scale_percentage(percentage, 40.0, 50.0),
-                    ProgressStage::Blit => scale_percentage(percentage, 20.0, 50.0),
-                    ProgressStage::Transaction => scale_percentage(percentage, 50.0, 70.0),
-                    ProgressStage::System => scale_percentage(percentage, 70.0, 90.0),
+                    ProgressStage::Resolve => {
+                        unsafe {
+                            pk_backend_job_set_status(
+                                job_ptr,
+                                PkStatusEnum_PK_STATUS_ENUM_DEP_RESOLVE,
+                            );
+                        }
+                        scale_percentage(percentage, 0.0, 10.0)
+                    }
+                    ProgressStage::Downloading => {
+                        unsafe {
+                            pk_backend_job_set_status(
+                                job_ptr,
+                                PkStatusEnum_PK_STATUS_ENUM_DOWNLOAD,
+                            );
+                        }
+                        scale_percentage(percentage, 10.0, 40.0)
+                    }
+                    ProgressStage::Blit => {
+                        unsafe {
+                            pk_backend_job_set_status(job_ptr, PkStatusEnum_PK_STATUS_ENUM_INSTALL);
+                        }
+                        scale_percentage(percentage, 40.0, 70.0)
+                    }
+                    ProgressStage::Transaction => scale_percentage(percentage, 70.0, 80.0),
+                    ProgressStage::System => scale_percentage(percentage, 80.0, 90.0),
                     ProgressStage::Boot => scale_percentage(percentage, 90.0, 100.0),
                 };
                 unsafe {
@@ -1504,6 +1472,21 @@ unsafe extern "C" fn backend_install_packages_thread(
             })),
         )
         .pk_err(job);
+
+    if simulate {
+        for pkg in pkgs {
+            unsafe {
+                let id = moss_build_package_id_from_registry(&pkg, &client).pk_err(job);
+                let c_summary = CString::new(pkg.meta.summary.clone()).unwrap();
+                pk_backend_job_package(
+                    job,
+                    PkInfoEnum_PK_INFO_ENUM_INSTALLING,
+                    id,
+                    c_summary.as_ptr(),
+                );
+            }
+        }
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -1579,10 +1562,9 @@ unsafe extern "C" fn backend_update_packages_thread(
                 let adjusted_percentage = match stage {
                     ProgressStage::Resolve => scale_percentage(percentage, 0.0, 20.0),
                     ProgressStage::Downloading => scale_percentage(percentage, 20.0, 40.0),
-                    ProgressStage::Caching => scale_percentage(percentage, 40.0, 50.0),
-                    ProgressStage::Blit => scale_percentage(percentage, 20.0, 50.0),
-                    ProgressStage::Transaction => scale_percentage(percentage, 50.0, 70.0),
-                    ProgressStage::System => scale_percentage(percentage, 70.0, 90.0),
+                    ProgressStage::Blit => scale_percentage(percentage, 40.0, 70.0),
+                    ProgressStage::Transaction => scale_percentage(percentage, 70.0, 80.0),
+                    ProgressStage::System => scale_percentage(percentage, 80.0, 90.0),
                     ProgressStage::Boot => scale_percentage(percentage, 90.0, 100.0),
                 };
                 unsafe {

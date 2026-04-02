@@ -2,7 +2,7 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::ffi::{CStr, CString, c_void};
 use std::os::raw::c_char;
 use std::path::Path;
@@ -30,8 +30,7 @@ use moss::{
     client::{Client, ProgressStage, fetch::DownloadCallback},
     environment,
     package::Flags,
-    package::{self, Id},
-    registry::transaction,
+    package::{self},
     repository::{self, Priority},
     runtime,
 };
@@ -234,6 +233,19 @@ fn moss_build_package_id_from_registry(pkg: &Package, client: &Client) -> Result
     })
 }
 
+/// Split up a package id into parts
+/// (name, version, arch, data)
+fn split_package_id(package_id: &str) -> Option<(&str, &str, &str, &str)> {
+    let split: Vec<&str> = package_id.split_terminator(";").collect();
+    // SAFETY: Our package id should already be validated by packagekit but
+    //         return an option anyway i guess
+    if let Some([name, version, arch, data]) = split.get(0..4) {
+        Some((name, version, arch, data))
+    } else {
+        None
+    }
+}
+
 /// Gets a moss pkg from the registry from a pk_package_id
 // TODO: should this be a Result? plently of error oppotunities
 fn moss_get_pkg_from_package_id(package_id: *const c_char, client: &Client) -> Option<Package> {
@@ -399,8 +411,9 @@ unsafe extern "C" fn backend_download_packages_thread(
         let job_clone = job_clone.clone();
         let c_id = CString::new(id.clone()).pk_err(job);
         let id_clone = id.clone();
+        let (name, _, _, _) = split_package_id(id.as_str()).unwrap();
         match client.fetch(
-            &vec![id.as_str()],
+            &vec![name],
             Path::new("."),
             false,
             Some(Arc::new(move |download_callback| {
